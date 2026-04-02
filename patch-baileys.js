@@ -17,7 +17,6 @@ for (const p of possibleBases) {
 }
 
 if (!BASE) {
-  // Search for it
   const { execSync } = require('child_process');
   const result = execSync('find / -path "*/baileys/lib/Defaults/index.js" -maxdepth 8 2>/dev/null').toString().trim();
   if (result) {
@@ -40,7 +39,7 @@ function patchFile(relPath, patches) {
       console.log(`  [OK] ${description}`);
     } else {
       console.error(`  [FAIL] Could not find pattern for: ${description}`);
-      console.error(`  Pattern: ${search.substring(0, 80)}...`);
+      console.error(`  Pattern: ${search.substring(0, 100)}...`);
       process.exit(1);
     }
   }
@@ -50,7 +49,6 @@ function patchFile(relPath, patches) {
 
 // =============================================
 // PATCH 1: Defaults/index.js
-// Add NEWSLETTER_MEDIA_PATH_MAP after MEDIA_PATH_MAP
 // =============================================
 console.log('\n--- Patch 1: Defaults/index.js ---');
 const defaultsPath = path.join(BASE, 'Defaults/index.js');
@@ -68,7 +66,6 @@ export const NEWSLETTER_MEDIA_PATH_MAP = {
 `;
 
 if (!defaultsContent.includes('NEWSLETTER_MEDIA_PATH_MAP')) {
-  // Add after MEDIA_HKDF_KEY_MAPPING declaration
   defaultsContent = defaultsContent.replace(
     'export const MEDIA_HKDF_KEY_MAPPING',
     newsletterMap + 'export const MEDIA_HKDF_KEY_MAPPING'
@@ -76,12 +73,11 @@ if (!defaultsContent.includes('NEWSLETTER_MEDIA_PATH_MAP')) {
   fs.writeFileSync(defaultsPath, defaultsContent);
   console.log('  [OK] Added NEWSLETTER_MEDIA_PATH_MAP');
 } else {
-  console.log('  [SKIP] NEWSLETTER_MEDIA_PATH_MAP already exists');
+  console.log('  [SKIP] Already exists');
 }
 
 // =============================================
 // PATCH 2: Socket/messages-send.js
-// Add mediatype attribute to plaintext node for newsletters
 // =============================================
 console.log('\n--- Patch 2: Socket/messages-send.js ---');
 patchFile('Socket/messages-send.js', [
@@ -94,35 +90,29 @@ patchFile('Socket/messages-send.js', [
 
 // =============================================
 // PATCH 3: Utils/messages-media.js
-// Use newsletter-specific upload paths
 // =============================================
 console.log('\n--- Patch 3: Utils/messages-media.js ---');
 patchFile('Utils/messages-media.js', [
-  // 3a: Import NEWSLETTER_MEDIA_PATH_MAP
   [
     'MEDIA_HKDF_KEY_MAPPING, MEDIA_PATH_MAP',
     'MEDIA_HKDF_KEY_MAPPING, MEDIA_PATH_MAP, NEWSLETTER_MEDIA_PATH_MAP',
     'Import NEWSLETTER_MEDIA_PATH_MAP'
   ],
-  // 3b: Add newsletter parameter
   [
     '{ mediaType, fileEncSha256B64, timeoutMs }',
     '{ mediaType, fileEncSha256B64, timeoutMs, newsletter }',
     'Add newsletter parameter'
   ],
-  // 3c: Use newsletter paths for URL construction
   [
     'const url = `https://${hostname}${MEDIA_PATH_MAP[mediaType]}/${fileEncSha256B64}?auth=${auth}&token=${fileEncSha256B64}`;',
     'const mediaPath = (newsletter ? NEWSLETTER_MEDIA_PATH_MAP[mediaType] : undefined) || MEDIA_PATH_MAP[mediaType];\n            const url = `https://${hostname}${mediaPath}/${fileEncSha256B64}?auth=${auth}&token=${fileEncSha256B64}` + (newsletter ? \'&server_thumb_gen=1\' : \'\');',
     'Use newsletter upload paths + server_thumb_gen'
   ],
-  // 3d: Fallback mediaUrl to direct_path
   [
     'mediaUrl: result.url,',
     'mediaUrl: result.url || result.direct_path,',
     'Fallback mediaUrl to direct_path'
   ],
-  // 3e: Add thumbnail info to return
   [
     'ts: result.ts',
     'ts: result.ts,\n                        thumbnailDirectPath: result.thumbnail_info?.thumbnail_direct_path,\n                        thumbnailSha256: result.thumbnail_info?.thumbnail_sha256',
@@ -132,17 +122,14 @@ patchFile('Utils/messages-media.js', [
 
 // =============================================
 // PATCH 4: Utils/messages.js
-// Pass newsletter:true and handle thumbnail for newsletter uploads
 // =============================================
 console.log('\n--- Patch 4: Utils/messages.js ---');
 patchFile('Utils/messages.js', [
-  // 4a: In newsletter branch - destructure thumbnail fields from upload result
   [
     'const { mediaUrl, directPath } = await options.upload(filePath, {\n            fileEncSha256B64: fileSha256B64,\n            mediaType: mediaType,\n            timeoutMs: options.mediaUploadTimeoutMs\n        });',
     'const { directPath, thumbnailDirectPath, thumbnailSha256 } = await options.upload(filePath, {\n            fileEncSha256B64: fileSha256B64,\n            mediaType: mediaType,\n            timeoutMs: options.mediaUploadTimeoutMs,\n            newsletter: true\n        });',
     'Pass newsletter:true and destructure thumbnail fields'
   ],
-  // 4b: In newsletter branch - remove url, add fileEncSha256=fileSha256 and thumbnail fields
   [
     "url: mediaUrl,\n                directPath,\n                fileSha256,\n                fileLength,\n                ...uploadData,\n                media: undefined",
     "directPath,\n                fileSha256,\n                fileEncSha256: fileSha256,\n                fileLength,\n                thumbnailDirectPath,\n                thumbnailSha256: thumbnailSha256 ? Buffer.from(thumbnailSha256, 'base64') : undefined,\n                ...uploadData,\n                media: undefined",
@@ -151,12 +138,12 @@ patchFile('Utils/messages.js', [
 ]);
 
 // =============================================
-// PATCH 5: Evolution API - whatsapp.baileys.service.js
+// PATCH 5: Evolution API - whatsapp.baileys.service.js (MINIFIED)
 // Pass JID to prepareWAMessageMedia for newsletter detection
+// and bypass forward for newsletters
 // =============================================
 console.log('\n--- Patch 5: Evolution API whatsapp.baileys.service.js ---');
 
-// Find the Evolution API compiled service file
 const possibleEvoPaths = [
   '/evolution/dist/api/integrations/channel/whatsapp/whatsapp.baileys.service.js',
   '/app/dist/api/integrations/channel/whatsapp/whatsapp.baileys.service.js',
@@ -164,104 +151,60 @@ const possibleEvoPaths = [
 
 let evoPath;
 for (const p of possibleEvoPaths) {
-  if (fs.existsSync(p)) {
-    evoPath = p;
-    break;
-  }
+  if (fs.existsSync(p)) { evoPath = p; break; }
 }
-
 if (!evoPath) {
   const { execSync } = require('child_process');
-  const result = execSync('find / -name "whatsapp.baileys.service.js" -path "*/dist/*" -maxdepth 8 2>/dev/null').toString().trim().split('\n')[0];
-  if (result) {
-    evoPath = result;
-  }
+  const r = execSync('find / -name "whatsapp.baileys.service.js" -path "*/dist/*" -maxdepth 8 2>/dev/null').toString().trim().split('\n')[0];
+  if (r) evoPath = r;
 }
+if (!evoPath) { console.error('  [FAIL] Could not find Evolution API service file'); process.exit(1); }
 
-if (!evoPath) {
-  console.error('  [FAIL] Could not find Evolution API service file');
+console.log(`  Found at: ${evoPath}`);
+let evoContent = fs.readFileSync(evoPath, 'utf8');
+
+// 5a: Pass jid to prepareWAMessageMedia (minified: {upload:this.client.waUploadToServer})
+const uploadPat = '{upload:this.client.waUploadToServer}';
+if (evoContent.includes(uploadPat)) {
+  evoContent = evoContent.replace(uploadPat, '{upload:this.client.waUploadToServer,jid:this._newsletterJid}');
+  console.log('  [OK] Pass jid to prepareWAMessageMedia');
+} else {
+  console.error('  [FAIL] upload pattern not found');
   process.exit(1);
 }
 
-console.log(`  Found Evolution API at: ${evoPath}`);
-let evoContent = fs.readFileSync(evoPath, 'utf8');
-
-// 5a: Patch prepareMediaMessage to accept and pass destinationJid
-// Find: { upload: this.client.waUploadToServer }
-// Replace: { upload: this.client.waUploadToServer, jid: destinationJid }
-// Also need to add destinationJid parameter to the method
-
-// First, find the prepareMediaMessage method signature and add jid param
-const prepareMediaOld = 'async prepareMediaMessage(mediaMessage)';
-const prepareMediaNew = 'async prepareMediaMessage(mediaMessage, destinationJid)';
-if (evoContent.includes(prepareMediaOld)) {
-  evoContent = evoContent.replace(prepareMediaOld, prepareMediaNew);
-  console.log('  [OK] Added destinationJid parameter to prepareMediaMessage');
-} else {
-  console.log('  [WARN] prepareMediaMessage signature not found, trying alternative patterns');
-  // Try compiled patterns
-  const alt1 = 'prepareMediaMessage(mediaMessage)';
-  if (evoContent.includes(alt1)) {
-    evoContent = evoContent.replace(alt1, 'prepareMediaMessage(mediaMessage, destinationJid)');
-    console.log('  [OK] Added destinationJid parameter (alt pattern)');
-  }
+// 5b: In mediaMessage method, store destination JID before calling prepareMediaMessage
+// Minified pattern: let n=await this.prepareMediaMessage(i);return await this.sendMessageWithTyping(e.number
+// We use regex to handle variable name variations
+const mediaCallRe = /let (\w)=await this\.prepareMediaMessage\((\w)\);return await this\.sendMessageWithTyping\((\w)\.number/g;
+let mediaCallMatch;
+let mediaCallCount = 0;
+// Reset and replace all occurrences (there may be 2: one per class)
+const mediaCallMatches = [...evoContent.matchAll(mediaCallRe)];
+console.log(`  [INFO] Found ${mediaCallMatches.length} mediaMessage call patterns`);
+for (const m of mediaCallMatches) {
+  const [full, varN, varI, varE] = m;
+  const replacement = `this._newsletterJid=${varE}.number;let ${varN}=await this.prepareMediaMessage(${varI});this._newsletterJid=null;return await this.sendMessageWithTyping(${varE}.number`;
+  evoContent = evoContent.replace(full, replacement);
+  mediaCallCount++;
+  console.log(`  [OK] Store newsletter JID before prepareMediaMessage (vars: ${varN},${varI},${varE})`);
+}
+if (mediaCallCount === 0) {
+  console.error('  [FAIL] Could not find mediaMessage call pattern');
+  process.exit(1);
 }
 
-// 5b: Pass jid to prepareWAMessageMedia options
-const uploadOld1 = '{ upload: this.client.waUploadToServer }';
-const uploadNew1 = '{ upload: this.client.waUploadToServer, jid: destinationJid }';
-if (evoContent.includes(uploadOld1)) {
-  evoContent = evoContent.replace(uploadOld1, uploadNew1);
-  console.log('  [OK] Pass jid to prepareWAMessageMedia');
-} else {
-  // Try alternative patterns (compiled code may vary)
-  const alt2 = 'upload: this.client.waUploadToServer';
-  const count = (evoContent.match(new RegExp(alt2.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
-  console.log(`  [INFO] Found ${count} occurrences of upload pattern`);
-  if (count > 0) {
-    // Replace the first occurrence that's part of prepareWAMessageMedia call
-    evoContent = evoContent.replace(
-      /(\bprepareWAMessageMedia\b[^)]*\{[^}]*upload:\s*this\.client\.waUploadToServer)\s*\}/,
-      '$1, jid: destinationJid }'
-    );
-    console.log('  [OK] Pass jid via regex pattern');
-  }
-}
-
-// 5c: In mediaMessage method, pass data.number to prepareMediaMessage
-const mediaCallOld = 'await this.prepareMediaMessage(mediaData)';
-const mediaCallNew = 'await this.prepareMediaMessage(mediaData, data.number)';
-if (evoContent.includes(mediaCallOld)) {
-  evoContent = evoContent.replace(mediaCallOld, mediaCallNew);
-  console.log('  [OK] Pass data.number to prepareMediaMessage');
-} else {
-  console.log('  [WARN] mediaMessage call pattern not found, trying alternatives');
-  const alt3 = 'this.prepareMediaMessage(mediaData)';
-  if (evoContent.includes(alt3)) {
-    evoContent = evoContent.replace(alt3, 'this.prepareMediaMessage(mediaData, data.number)');
-    console.log('  [OK] Pass data.number (alt pattern)');
-  }
-}
-
-// 5d: For newsletter messages, don't use forward pattern - send directly
-// Find the sendMessageWithTyping call and add newsletter-aware logic
-// The key issue: forward messages skip re-upload
-// We need to detect newsletter JID and send content directly instead of forwarding
-const forwardPattern = "forward: { key: { remoteJid: this.instance.wuid, fromMe: true }, message }";
-if (evoContent.includes(forwardPattern)) {
-  // We need to wrap the send logic to check if it's a newsletter
-  // For newsletters, send the message content directly instead of forwarding
-  const sendBlockOld = `{
-                forward: { key: { remoteJid: this.instance.wuid, fromMe: true }, message },`;
-  const sendBlockNew = `sender.endsWith('@newsletter') ? message : {
-                forward: { key: { remoteJid: this.instance.wuid, fromMe: true }, message },`;
-
-  if (evoContent.includes(sendBlockOld)) {
-    evoContent = evoContent.replace(sendBlockOld, sendBlockNew);
-    console.log('  [OK] Newsletter sends content directly instead of forwarding');
-  } else {
-    console.log('  [WARN] Could not find exact forward block pattern');
-  }
+// 5c: For newsletter messages, bypass forward pattern - send content directly
+// Minified: forward:{key:{remoteJid:this.instance.wuid,fromMe:!0},message:t}
+const fwdRe = /forward:\{key:\{remoteJid:this\.instance\.wuid,fromMe:!0\},message:(\w)\}/g;
+const fwdMatches = [...evoContent.matchAll(fwdRe)];
+console.log(`  [INFO] Found ${fwdMatches.length} forward patterns`);
+for (const m of fwdMatches) {
+  const [full, msgVar] = m;
+  // Replace forward with: if newsletter, send content directly; else use forward
+  const replacement = `...(e.endsWith("@newsletter")?${msgVar}:{forward:{key:{remoteJid:this.instance.wuid,fromMe:!0},message:${msgVar}}})`;
+  evoContent = evoContent.replace(full, replacement);
+  console.log(`  [OK] Newsletter bypasses forward (msg var: ${msgVar})`);
 }
 
 fs.writeFileSync(evoPath, evoContent);
