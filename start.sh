@@ -2,6 +2,7 @@
 echo "=== PATCH REPORT ==="
 cat /tmp/patch-report.txt 2>/dev/null || echo "No patch report found"
 echo "=== END PATCH REPORT ==="
-# Run the original Evolution API start command
+
+# Find and execute the original entrypoint or default command
 cd /evolution
-exec npm run start:prod
+exec node --network-family-autoselection-attempt-timeout=1000 dist/main "$@"
