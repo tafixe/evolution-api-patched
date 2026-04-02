@@ -163,6 +163,25 @@ if (!evoPath) { console.error('  [FAIL] Could not find Evolution API service fil
 console.log(`  Found at: ${evoPath}`);
 let evoContent = fs.readFileSync(evoPath, 'utf8');
 
+// First, add a top-level debug marker
+if (!evoContent.includes('[PATCH-MARKER]')) {
+  evoContent = 'console.log("[PATCH-MARKER] Patched baileys service loaded");\n' + evoContent;
+  console.log('  [OK] Added patch marker at top of file');
+}
+
+// Find all method names that reference "newsletter" or "media" to understand the code flow
+const methodNames = [...evoContent.matchAll(/async (\w+)\(/g)].map(m => m[1]);
+const mediaRelated = methodNames.filter(n => /media|image|send|message/i.test(n));
+console.log(`  [INFO] Media-related async methods: ${[...new Set(mediaRelated)].join(', ')}`);
+
+// Also search for sendMedia or mediaMessage usage patterns
+const sendMediaRefs = [...evoContent.matchAll(/(\w+)\.mediaMessage\(/g)].map(m => m[0]);
+console.log(`  [INFO] mediaMessage call sites: ${sendMediaRefs.length} refs`);
+
+// Search for prepareMediaMessage
+const prepMediaRefs = [...evoContent.matchAll(/(\w+)\.prepareMediaMessage\(/g)].map(m => m[0]);
+console.log(`  [INFO] prepareMediaMessage call sites: ${prepMediaRefs.length} refs`);
+
 // Strategy: In the mediaMessage method, detect newsletter JID and use
 // this.client.sendMessage(jid, {image: {url: media}, caption: caption}) directly.
 // This goes through Baileys' generateWAMessage -> generateWAMessageContent -> prepareWAMessageMedia
