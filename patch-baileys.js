@@ -150,4 +150,121 @@ patchFile('Utils/messages.js', [
   ]
 ]);
 
+// =============================================
+// PATCH 5: Evolution API - whatsapp.baileys.service.js
+// Pass JID to prepareWAMessageMedia for newsletter detection
+// =============================================
+console.log('\n--- Patch 5: Evolution API whatsapp.baileys.service.js ---');
+
+// Find the Evolution API compiled service file
+const possibleEvoPaths = [
+  '/evolution/dist/api/integrations/channel/whatsapp/whatsapp.baileys.service.js',
+  '/app/dist/api/integrations/channel/whatsapp/whatsapp.baileys.service.js',
+];
+
+let evoPath;
+for (const p of possibleEvoPaths) {
+  if (fs.existsSync(p)) {
+    evoPath = p;
+    break;
+  }
+}
+
+if (!evoPath) {
+  const { execSync } = require('child_process');
+  const result = execSync('find / -name "whatsapp.baileys.service.js" -path "*/dist/*" -maxdepth 8 2>/dev/null').toString().trim().split('\n')[0];
+  if (result) {
+    evoPath = result;
+  }
+}
+
+if (!evoPath) {
+  console.error('  [FAIL] Could not find Evolution API service file');
+  process.exit(1);
+}
+
+console.log(`  Found Evolution API at: ${evoPath}`);
+let evoContent = fs.readFileSync(evoPath, 'utf8');
+
+// 5a: Patch prepareMediaMessage to accept and pass destinationJid
+// Find: { upload: this.client.waUploadToServer }
+// Replace: { upload: this.client.waUploadToServer, jid: destinationJid }
+// Also need to add destinationJid parameter to the method
+
+// First, find the prepareMediaMessage method signature and add jid param
+const prepareMediaOld = 'async prepareMediaMessage(mediaMessage)';
+const prepareMediaNew = 'async prepareMediaMessage(mediaMessage, destinationJid)';
+if (evoContent.includes(prepareMediaOld)) {
+  evoContent = evoContent.replace(prepareMediaOld, prepareMediaNew);
+  console.log('  [OK] Added destinationJid parameter to prepareMediaMessage');
+} else {
+  console.log('  [WARN] prepareMediaMessage signature not found, trying alternative patterns');
+  // Try compiled patterns
+  const alt1 = 'prepareMediaMessage(mediaMessage)';
+  if (evoContent.includes(alt1)) {
+    evoContent = evoContent.replace(alt1, 'prepareMediaMessage(mediaMessage, destinationJid)');
+    console.log('  [OK] Added destinationJid parameter (alt pattern)');
+  }
+}
+
+// 5b: Pass jid to prepareWAMessageMedia options
+const uploadOld1 = '{ upload: this.client.waUploadToServer }';
+const uploadNew1 = '{ upload: this.client.waUploadToServer, jid: destinationJid }';
+if (evoContent.includes(uploadOld1)) {
+  evoContent = evoContent.replace(uploadOld1, uploadNew1);
+  console.log('  [OK] Pass jid to prepareWAMessageMedia');
+} else {
+  // Try alternative patterns (compiled code may vary)
+  const alt2 = 'upload: this.client.waUploadToServer';
+  const count = (evoContent.match(new RegExp(alt2.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
+  console.log(`  [INFO] Found ${count} occurrences of upload pattern`);
+  if (count > 0) {
+    // Replace the first occurrence that's part of prepareWAMessageMedia call
+    evoContent = evoContent.replace(
+      /(\bprepareWAMessageMedia\b[^)]*\{[^}]*upload:\s*this\.client\.waUploadToServer)\s*\}/,
+      '$1, jid: destinationJid }'
+    );
+    console.log('  [OK] Pass jid via regex pattern');
+  }
+}
+
+// 5c: In mediaMessage method, pass data.number to prepareMediaMessage
+const mediaCallOld = 'await this.prepareMediaMessage(mediaData)';
+const mediaCallNew = 'await this.prepareMediaMessage(mediaData, data.number)';
+if (evoContent.includes(mediaCallOld)) {
+  evoContent = evoContent.replace(mediaCallOld, mediaCallNew);
+  console.log('  [OK] Pass data.number to prepareMediaMessage');
+} else {
+  console.log('  [WARN] mediaMessage call pattern not found, trying alternatives');
+  const alt3 = 'this.prepareMediaMessage(mediaData)';
+  if (evoContent.includes(alt3)) {
+    evoContent = evoContent.replace(alt3, 'this.prepareMediaMessage(mediaData, data.number)');
+    console.log('  [OK] Pass data.number (alt pattern)');
+  }
+}
+
+// 5d: For newsletter messages, don't use forward pattern - send directly
+// Find the sendMessageWithTyping call and add newsletter-aware logic
+// The key issue: forward messages skip re-upload
+// We need to detect newsletter JID and send content directly instead of forwarding
+const forwardPattern = "forward: { key: { remoteJid: this.instance.wuid, fromMe: true }, message }";
+if (evoContent.includes(forwardPattern)) {
+  // We need to wrap the send logic to check if it's a newsletter
+  // For newsletters, send the message content directly instead of forwarding
+  const sendBlockOld = `{
+                forward: { key: { remoteJid: this.instance.wuid, fromMe: true }, message },`;
+  const sendBlockNew = `sender.endsWith('@newsletter') ? message : {
+                forward: { key: { remoteJid: this.instance.wuid, fromMe: true }, message },`;
+
+  if (evoContent.includes(sendBlockOld)) {
+    evoContent = evoContent.replace(sendBlockOld, sendBlockNew);
+    console.log('  [OK] Newsletter sends content directly instead of forwarding');
+  } else {
+    console.log('  [WARN] Could not find exact forward block pattern');
+  }
+}
+
+fs.writeFileSync(evoPath, evoContent);
+console.log(`  Saved: ${evoPath}`);
+
 console.log('\n=== All patches applied successfully! ===\n');
