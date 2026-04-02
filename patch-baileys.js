@@ -173,9 +173,10 @@ let evoContent = fs.readFileSync(evoPath, 'utf8');
 //
 // We inject a newsletter check at the start of the method body
 
-const mediaMethodRe = /async mediaMessage\((\w),(\w),(\w)=!1\)\{let (\w)=\{\.\.\.(\w)\}/;
-const mediaMatch = evoContent.match(mediaMethodRe);
-if (mediaMatch) {
+const mediaMethodRe = /async mediaMessage\((\w),(\w),(\w)=!1\)\{let (\w)=\{\.\.\.(\w)\}/g;
+const mediaMatches = [...evoContent.matchAll(mediaMethodRe)];
+console.log(`  [INFO] Found ${mediaMatches.length} mediaMessage methods`);
+for (const mediaMatch of mediaMatches) {
   const [full, paramE, paramT, paramO, varI, spreadVar] = mediaMatch;
   // Inject newsletter handling before the regular flow
   const newsletterHandler = `async mediaMessage(${paramE},${paramT},${paramO}=!1){` +
@@ -191,8 +192,9 @@ if (mediaMatch) {
     `}` +
     `let ${varI}={...${spreadVar}}`;
   evoContent = evoContent.replace(full, newsletterHandler);
-  console.log('  [OK] Injected newsletter media shortcut in mediaMessage');
-} else {
+  console.log(`  [OK] Injected newsletter media shortcut (vars: ${paramE},${paramT})`);
+}
+if (mediaMatches.length === 0) {
   console.log('  [WARN] mediaMessage method signature not found, trying broader pattern');
   // Try without the destructuring part
   const alt = evoContent.match(/async mediaMessage\((\w),(\w),(\w)=!1\)\{/);
