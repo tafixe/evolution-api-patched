@@ -163,24 +163,13 @@ if (!evoPath) { console.error('  [FAIL] Could not find Evolution API service fil
 console.log(`  Found at: ${evoPath}`);
 let evoContent = fs.readFileSync(evoPath, 'utf8');
 
-// First, add a top-level debug marker
-if (!evoContent.includes('[PATCH-MARKER]')) {
-  evoContent = 'console.log("[PATCH-MARKER] Patched baileys service loaded");\n' + evoContent;
-  console.log('  [OK] Added patch marker at top of file');
-}
+// Check file format
+const firstLine = evoContent.split('\n')[0];
+console.log(`  [DIAG] First line: ${firstLine.substring(0, 100)}`);
 
-// Find all method names that reference "newsletter" or "media" to understand the code flow
-const methodNames = [...evoContent.matchAll(/async (\w+)\(/g)].map(m => m[1]);
-const mediaRelated = methodNames.filter(n => /media|image|send|message/i.test(n));
-console.log(`  [INFO] Media-related async methods: ${[...new Set(mediaRelated)].join(', ')}`);
-
-// Also search for sendMedia or mediaMessage usage patterns
-const sendMediaRefs = [...evoContent.matchAll(/(\w+)\.mediaMessage\(/g)].map(m => m[0]);
-console.log(`  [INFO] mediaMessage call sites: ${sendMediaRefs.length} refs`);
-
-// Search for prepareMediaMessage
-const prepMediaRefs = [...evoContent.matchAll(/(\w+)\.prepareMediaMessage\(/g)].map(m => m[0]);
-console.log(`  [INFO] prepareMediaMessage call sites: ${prepMediaRefs.length} refs`);
+// Dump ALL unique method names to find the actual entry point for sendMedia
+const allMethods = [...new Set([...evoContent.matchAll(/async (\w+)\(/g)].map(m => m[1]))];
+console.log(`  [DIAG] All async methods (${allMethods.length}): ${allMethods.join(', ')}`);
 
 // Strategy: In the mediaMessage method, detect newsletter JID and use
 // this.client.sendMessage(jid, {image: {url: media}, caption: caption}) directly.
@@ -198,24 +187,9 @@ console.log(`  [INFO] Found ${mediaMatches.length} mediaMessage methods`);
 for (const mediaMatch of mediaMatches) {
   const [full, paramE, paramT, paramO, varI, spreadVar] = mediaMatch;
   // Inject newsletter handling before the regular flow
+  // Simple test: if newsletter, throw identifiable error to confirm method is called
   const newsletterHandler = `async mediaMessage(${paramE},${paramT},${paramO}=!1){` +
-    // Always log to verify we're being called
-    `console.log("[PATCH-DEBUG] mediaMessage called, number=" + ${paramE}?.number + " hasBuffer=" + !!${paramT} + " mediatype=" + ${paramE}?.mediatype);` +
-    // Newsletter shortcut: use sendMessage directly (removed !t check — buffer may exist even for URL media)
-    `if(${paramE}.number&&${paramE}.number.endsWith("@newsletter")){` +
-      `try{` +
-        `let _mt=${paramE}.mediatype==="ptv"?"video":${paramE}.mediatype;` +
-        `let _media=${paramE}.media;` +
-        // If buffer was passed, convert back to base64 data URI for Baileys
-        `if(${paramT}&&${paramT}.buffer){_media="data:"+${paramE}.mimetype+";base64,"+${paramT}.buffer.toString("base64");console.log("[PATCH-DEBUG] Using buffer as base64 data URI")}` +
-        `console.log("[PATCH-DEBUG] Newsletter shortcut: type=" + _mt + " media=" + (typeof _media === "string" ? _media.substring(0,80) : "non-string"));` +
-        `let _content={[_mt]:{url:_media},caption:${paramE}.caption,mimetype:${paramE}.mimetype};` +
-        `let _sent=await this.client.sendMessage(${paramE}.number,_content);` +
-        `let _dp=_sent?.message?.imageMessage?.directPath||_sent?.message?.videoMessage?.directPath||"";` +
-        `console.log("[PATCH-DEBUG] sendMessage result directPath=" + _dp.substring(0,40));` +
-        `return{key:_sent.key,message:_sent.message,messageType:_mt+"Message",messageTimestamp:_sent.messageTimestamp};` +
-      `}catch(_err){console.error("[Newsletter Media] ERROR:",_err.message,_err.stack?.substring(0,300))}` +
-    `}` +
+    `if(${paramE}?.number?.endsWith("@newsletter")){throw new Error("PATCH_NEWSLETTER_INTERCEPTED")}` +
     `let ${varI}={...${spreadVar}}`;
   evoContent = evoContent.replace(full, newsletterHandler);
   console.log(`  [OK] Injected newsletter media shortcut (vars: ${paramE},${paramT})`);
