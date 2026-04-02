@@ -180,18 +180,22 @@ for (const mediaMatch of mediaMatches) {
   const [full, paramE, paramT, paramO, varI, spreadVar] = mediaMatch;
   // Inject newsletter handling before the regular flow
   const newsletterHandler = `async mediaMessage(${paramE},${paramT},${paramO}=!1){` +
-    // Newsletter shortcut: use sendMessage directly so Baileys handles newsletter upload paths
-    `if(${paramE}.number&&${paramE}.number.endsWith("@newsletter")&&!${paramT}){` +
+    // Always log to verify we're being called
+    `console.log("[PATCH-DEBUG] mediaMessage called, number=" + ${paramE}?.number + " hasBuffer=" + !!${paramT} + " mediatype=" + ${paramE}?.mediatype);` +
+    // Newsletter shortcut: use sendMessage directly (removed !t check — buffer may exist even for URL media)
+    `if(${paramE}.number&&${paramE}.number.endsWith("@newsletter")){` +
       `try{` +
-        `console.log("[PATCH-DEBUG] Newsletter media shortcut triggered for " + ${paramE}.number + " mediatype=" + ${paramE}.mediatype);` +
         `let _mt=${paramE}.mediatype==="ptv"?"video":${paramE}.mediatype;` +
         `let _media=${paramE}.media;` +
-        `console.log("[PATCH-DEBUG] Sending via this.client.sendMessage, type=" + _mt + " media=" + _media?.substring(0,80));` +
+        // If buffer was passed, convert back to base64 data URI for Baileys
+        `if(${paramT}&&${paramT}.buffer){_media="data:"+${paramE}.mimetype+";base64,"+${paramT}.buffer.toString("base64");console.log("[PATCH-DEBUG] Using buffer as base64 data URI")}` +
+        `console.log("[PATCH-DEBUG] Newsletter shortcut: type=" + _mt + " media=" + (typeof _media === "string" ? _media.substring(0,80) : "non-string"));` +
         `let _content={[_mt]:{url:_media},caption:${paramE}.caption,mimetype:${paramE}.mimetype};` +
         `let _sent=await this.client.sendMessage(${paramE}.number,_content);` +
-        `console.log("[PATCH-DEBUG] sendMessage result directPath=" + JSON.stringify(_sent?.message?.imageMessage?.directPath?.substring(0,30)));` +
+        `let _dp=_sent?.message?.imageMessage?.directPath||_sent?.message?.videoMessage?.directPath||"";` +
+        `console.log("[PATCH-DEBUG] sendMessage result directPath=" + _dp.substring(0,40));` +
         `return{key:_sent.key,message:_sent.message,messageType:_mt+"Message",messageTimestamp:_sent.messageTimestamp};` +
-      `}catch(_err){console.error("[Newsletter Media] ERROR:",_err.message,_err.stack?.substring(0,200))}` +
+      `}catch(_err){console.error("[Newsletter Media] ERROR:",_err.message,_err.stack?.substring(0,300))}` +
     `}` +
     `let ${varI}={...${spreadVar}}`;
   evoContent = evoContent.replace(full, newsletterHandler);
