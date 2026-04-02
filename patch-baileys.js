@@ -243,6 +243,28 @@ if (mediaMatches.length === 0) {
   }
 }
 
+// Diagnostic: check file format and verify patched code
+console.log(`  [DIAG] File starts with: ${evoContent.substring(0, 120).replace(/\n/g, '\\n')}`);
+console.log(`  [DIAG] File length: ${evoContent.length} chars`);
+
+// Verify our injected mediaMessage is syntactically valid
+const testMatch = evoContent.match(/async mediaMessage\(\w,\w,\w=!1\)\{console\.log\("\[PATCH-DEBUG\]/);
+console.log(`  [DIAG] Patched mediaMessage found in output: ${!!testMatch}`);
+
+// Check if it's ESM (would break our prepended console.log)
+const isESM = evoContent.startsWith('import ') || evoContent.match(/^console\.log.*\nimport /m);
+console.log(`  [DIAG] Appears to be ESM: ${isESM}`);
+
+// Remove the PATCH-MARKER if file starts with import (ESM - our console.log breaks it)
+if (evoContent.startsWith('console.log("[PATCH-MARKER]')) {
+  const firstNewline = evoContent.indexOf('\n');
+  const afterMarker = evoContent.substring(firstNewline + 1);
+  if (afterMarker.startsWith('import ') || afterMarker.startsWith('"use strict"') || afterMarker.startsWith("'use strict'")) {
+    console.log('  [WARN] File is ESM/strict - removing top-level PATCH-MARKER to avoid syntax error');
+    evoContent = afterMarker;
+  }
+}
+
 fs.writeFileSync(evoPath, evoContent);
 console.log(`  Saved: ${evoPath}`);
 
