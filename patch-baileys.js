@@ -139,8 +139,8 @@ patchFile('Utils/messages.js', [
 
 // =============================================
 // PATCH 5: Evolution API - whatsapp.baileys.service.js (MINIFIED)
-// Pass JID to prepareWAMessageMedia for newsletter detection
-// and bypass forward for newsletters
+// For newsletters: bypass prepareMediaMessage entirely and use
+// this.client.sendMessage() which properly passes JID to Baileys
 // =============================================
 console.log('\n--- Patch 5: Evolution API whatsapp.baileys.service.js ---');
 
@@ -163,48 +163,56 @@ if (!evoPath) { console.error('  [FAIL] Could not find Evolution API service fil
 console.log(`  Found at: ${evoPath}`);
 let evoContent = fs.readFileSync(evoPath, 'utf8');
 
-// 5a: Pass jid to prepareWAMessageMedia (minified: {upload:this.client.waUploadToServer})
-const uploadPat = '{upload:this.client.waUploadToServer}';
-if (evoContent.includes(uploadPat)) {
-  evoContent = evoContent.replace(uploadPat, '{upload:this.client.waUploadToServer,jid:this._newsletterJid}');
-  console.log('  [OK] Pass jid to prepareWAMessageMedia');
+// Strategy: In the mediaMessage method, detect newsletter JID and use
+// this.client.sendMessage(jid, {image: {url: media}, caption: caption}) directly.
+// This goes through Baileys' generateWAMessage -> generateWAMessageContent -> prepareWAMessageMedia
+// which properly passes the JID and triggers the newsletter upload path.
+//
+// Minified mediaMessage pattern:
+// async mediaMessage(e,t,o=!1){let i={...e};t&&(i.media=t.buffer.toString("base64"));let n=await this.prepareMediaMessage(i);return await this.sendMessageWithTyping(e.number,...
+//
+// We inject a newsletter check at the start of the method body
+
+const mediaMethodRe = /async mediaMessage\((\w),(\w),(\w)=!1\)\{let (\w)=\{\.\.\.(\w)\}/;
+const mediaMatch = evoContent.match(mediaMethodRe);
+if (mediaMatch) {
+  const [full, paramE, paramT, paramO, varI, spreadVar] = mediaMatch;
+  // Inject newsletter handling before the regular flow
+  const newsletterHandler = `async mediaMessage(${paramE},${paramT},${paramO}=!1){` +
+    // Newsletter shortcut: use sendMessage directly so Baileys handles newsletter upload paths
+    `if(${paramE}.number&&${paramE}.number.endsWith("@newsletter")&&!${paramT}){` +
+      `try{` +
+        `let _mt=${paramE}.mediatype==="ptv"?"video":${paramE}.mediatype;` +
+        `let _media=${paramE}.media;` +
+        `let _content={[_mt]:{url:_media},caption:${paramE}.caption,mimetype:${paramE}.mimetype};` +
+        `let _sent=await this.client.sendMessage(${paramE}.number,_content);` +
+        `return{key:_sent.key,message:_sent.message,messageType:_mt+"Message",messageTimestamp:_sent.messageTimestamp};` +
+      `}catch(_err){console.error("[Newsletter Media]",_err.message)}` +
+    `}` +
+    `let ${varI}={...${spreadVar}}`;
+  evoContent = evoContent.replace(full, newsletterHandler);
+  console.log('  [OK] Injected newsletter media shortcut in mediaMessage');
 } else {
-  console.error('  [FAIL] upload pattern not found');
-  process.exit(1);
-}
-
-// 5b: In mediaMessage method, store destination JID before calling prepareMediaMessage
-// Minified pattern: let n=await this.prepareMediaMessage(i);return await this.sendMessageWithTyping(e.number
-// We use regex to handle variable name variations
-const mediaCallRe = /let (\w)=await this\.prepareMediaMessage\((\w)\);return await this\.sendMessageWithTyping\((\w)\.number/g;
-let mediaCallMatch;
-let mediaCallCount = 0;
-// Reset and replace all occurrences (there may be 2: one per class)
-const mediaCallMatches = [...evoContent.matchAll(mediaCallRe)];
-console.log(`  [INFO] Found ${mediaCallMatches.length} mediaMessage call patterns`);
-for (const m of mediaCallMatches) {
-  const [full, varN, varI, varE] = m;
-  const replacement = `this._newsletterJid=${varE}.number;let ${varN}=await this.prepareMediaMessage(${varI});this._newsletterJid=null;return await this.sendMessageWithTyping(${varE}.number`;
-  evoContent = evoContent.replace(full, replacement);
-  mediaCallCount++;
-  console.log(`  [OK] Store newsletter JID before prepareMediaMessage (vars: ${varN},${varI},${varE})`);
-}
-if (mediaCallCount === 0) {
-  console.error('  [FAIL] Could not find mediaMessage call pattern');
-  process.exit(1);
-}
-
-// 5c: For newsletter messages, bypass forward pattern - send content directly
-// Minified: forward:{key:{remoteJid:this.instance.wuid,fromMe:!0},message:t}
-const fwdRe = /forward:\{key:\{remoteJid:this\.instance\.wuid,fromMe:!0\},message:(\w)\}/g;
-const fwdMatches = [...evoContent.matchAll(fwdRe)];
-console.log(`  [INFO] Found ${fwdMatches.length} forward patterns`);
-for (const m of fwdMatches) {
-  const [full, msgVar] = m;
-  // Replace forward with: if newsletter, send content directly; else use forward
-  const replacement = `...(e.endsWith("@newsletter")?${msgVar}:{forward:{key:{remoteJid:this.instance.wuid,fromMe:!0},message:${msgVar}}})`;
-  evoContent = evoContent.replace(full, replacement);
-  console.log(`  [OK] Newsletter bypasses forward (msg var: ${msgVar})`);
+  console.log('  [WARN] mediaMessage method signature not found, trying broader pattern');
+  // Try without the destructuring part
+  const alt = evoContent.match(/async mediaMessage\((\w),(\w),(\w)=!1\)\{/);
+  if (alt) {
+    const [full, paramE, paramT, paramO] = alt;
+    const handler = `async mediaMessage(${paramE},${paramT},${paramO}=!1){` +
+      `if(${paramE}.number&&${paramE}.number.endsWith("@newsletter")&&!${paramT}){` +
+        `try{` +
+          `let _mt=${paramE}.mediatype==="ptv"?"video":${paramE}.mediatype;` +
+          `let _content={[_mt]:{url:${paramE}.media},caption:${paramE}.caption,mimetype:${paramE}.mimetype};` +
+          `let _sent=await this.client.sendMessage(${paramE}.number,_content);` +
+          `return{key:_sent.key,message:_sent.message,messageType:_mt+"Message",messageTimestamp:_sent.messageTimestamp};` +
+        `}catch(_err){console.error("[Newsletter Media]",_err.message)}` +
+      `}`;
+    evoContent = evoContent.replace(full, handler);
+    console.log('  [OK] Injected newsletter shortcut (alt pattern)');
+  } else {
+    console.error('  [FAIL] Could not find mediaMessage method');
+    process.exit(1);
+  }
 }
 
 fs.writeFileSync(evoPath, evoContent);
